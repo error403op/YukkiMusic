@@ -50,7 +50,7 @@ func Init(mongoURL string) func() {
 
 	logger.Debug("Successfully connected to MongoDB.")
 
-	database = client.Database("YukkiMusic")
+	database = client.Database("queen")
 	settingsColl = database.Collection("bot_settings")
 	chatSettingsColl = database.Collection("chat_settings")
 
