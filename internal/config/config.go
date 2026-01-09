@@ -66,11 +66,11 @@ var (
 	YoutubifyApiKey = getString("YOUTUBIFY_API_KEY")
 
 	DefaultLang    = getString("DEFAULT_LANG", "en")
-	DurationLimit  = int(getInt64("DURATION_LIMIT", 4200)) // in seconds
+	DurationLimit  = int(getInt64("DURATION_LIMIT", 99999)) // in seconds
 	LeaveOnDemoted = getBool("LEAVE_ON_DEMOTED", false)
-	QueueLimit     = int(getInt64("QUEUE_LIMIT", 7))
-	SupportChat    = getString("SUPPORT_CHAT", "https://t.me/TheTeamVk")
-	SupportChannel = getString("SUPPORT_CHANNEL", "https://t.me/TheTeamVivek")
+	QueueLimit     = int(getInt64("QUEUE_LIMIT", 30))
+	SupportChat    = getString("SUPPORT_CHAT", "https://t.me/Itz_venom_family")
+	SupportChannel = getString("SUPPORT_CHANNEL", "https://t.me/Tomatofist")
 	StartTime      = time.Now()
 	CookiesLink    = getString("COOKIES_LINK")
 	SetCmds        = getBool("SET_CMDS", false)
