@@ -265,7 +265,8 @@ func (s *SpotifyPlatform) getTrack(
 	return []*state.Track{track}, nil
 }
 
-// getPlaylist fetches all tracks from a playlist
+
+// getPlaylist fetches all tracks from a playlist (Python spotipy compatible way)
 func (s *SpotifyPlatform) getPlaylist(
 	ctx context.Context,
 	playlistID spotify.ID,
@@ -279,12 +280,8 @@ func (s *SpotifyPlatform) getPlaylist(
 
 	var tracks []*state.Track
 
-	// First page of tracks already included
+	// First page of tracks is already inside playlist.Tracks.Tracks
 	for _, item := range playlist.Tracks.Tracks {
-		if item.Track == nil {
-			continue
-		}
-
 		track := s.convertSpotifyTrack(
 			&item.Track.SimpleTrack,
 			item.Track.Album.Images,
@@ -310,6 +307,7 @@ func (s *SpotifyPlatform) getPlaylist(
 		}
 
 		for _, item := range page.Items {
+			// Here Track *can* be nil, so this check is correct
 			if item.Track.Track == nil {
 				continue
 			}
