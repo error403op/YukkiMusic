@@ -253,7 +253,7 @@ func (s *SpotifyPlatform) getTrack(
 	ctx context.Context,
 	trackID spotify.ID,
 ) ([]*state.Track, error) {
-	fullTrack, err := s.client.GetTrack(ctx, trackID)
+	fullTrack, err := s.client.GetTrack(ctx, trackID, spotify.Market("IN")) 
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch Spotify track: %w", err)
 	}
@@ -280,6 +280,7 @@ func (s *SpotifyPlatform) getPlaylist(
 			playlistID,
 			spotify.Limit(limit),
 			spotify.Offset(offset),
+			spotify.Market("IN"),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch Spotify playlist: %w", err)
@@ -313,7 +314,7 @@ func (s *SpotifyPlatform) getAlbum(
 	ctx context.Context,
 	albumID spotify.ID,
 ) ([]*state.Track, error) {
-	album, err := s.client.GetAlbum(ctx, albumID)
+	album, err := s.client.GetAlbum(ctx, albumID, spotify.Market("IN")) 
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch Spotify album: %w", err)
 	}
