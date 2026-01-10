@@ -270,12 +270,35 @@ func (s *SpotifyPlatform) getPlaylist(
 	ctx context.Context,
 	playlistID spotify.ID,
 ) ([]*state.Track, error) {
-	var tracks []*state.Track
-	offset := 0
-	limit := 100
 
-	for {
-		playlistPage, err := s.client.GetPlaylistItems(
+	// First fetch playlist object (same as spotipy.playlist())
+	playlist, err := s.client.GetPlaylist(ctx, playlistID, spotify.Market("IN"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch Spotify playlist metadata: %w", err)
+	}
+
+	var tracks []*state.Track
+
+	// First page of tracks already included
+	for _, item := range playlist.Tracks.Tracks {
+		if item.Track == nil {
+			continue
+		}
+
+		track := s.convertSpotifyTrack(
+			&item.Track.SimpleTrack,
+			item.Track.Album.Images,
+		)
+		tracks = append(tracks, track)
+	}
+
+	// Pagination for next pages
+	offset := len(playlist.Tracks.Tracks)
+	limit := 100
+	next := playlist.Tracks.Next
+
+	for next != "" {
+		page, err := s.client.GetPlaylistItems(
 			ctx,
 			playlistID,
 			spotify.Limit(limit),
@@ -283,10 +306,10 @@ func (s *SpotifyPlatform) getPlaylist(
 			spotify.Market("IN"),
 		)
 		if err != nil {
-			return nil, fmt.Errorf("failed to fetch Spotify playlist: %w", err)
+			return nil, fmt.Errorf("failed to fetch Spotify playlist items: %w", err)
 		}
 
-		for _, item := range playlistPage.Items {
+		for _, item := range page.Items {
 			if item.Track.Track == nil {
 				continue
 			}
@@ -298,17 +321,16 @@ func (s *SpotifyPlatform) getPlaylist(
 			tracks = append(tracks, track)
 		}
 
-		if playlistPage.Next == "" {
+		if page.Next == "" {
 			break
 		}
 
 		offset += limit
-
+		next = page.Next
 	}
 
 	return tracks, nil
 }
-
 // getAlbum fetches all tracks from an album
 func (s *SpotifyPlatform) getAlbum(
 	ctx context.Context,
