@@ -72,10 +72,14 @@ RUN node --version && \
     bun --version
 
 
+
 # Create non-root user
 RUN useradd -r -u 10001 appuser && \
     mkdir -p /app && \
-    chown -R appuser:appuser /app
+    mkdir -p /home/appuser/.cache/yt-dlp && \
+    chown -R appuser:appuser /app /home/appuser
+
+ENV HOME=/home/appuser
 
 WORKDIR /app
 
