@@ -150,12 +150,12 @@ func (y *YtDlpDownloader) Download(
 	args := []string{
 		"--no-playlist",
 		"--geo-bypass",
-		"--no-warnings",
 		"--no-part",
 		"--force-overwrites",
 		"--no-check-certificate",
 		"--print", "after_move:filepath",
 		"-o", outTpl,
+		"--verbose",
 	}
 
 	if y.isYouTubeURL(track.URL) {
