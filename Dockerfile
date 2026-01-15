@@ -23,6 +23,8 @@ RUN chmod +x install.sh && \
     CGO_ENABLED=1 go build -v -trimpath -ldflags="-w -s" -o app ./cmd/app/
 
 
+# ---------------- RUNTIME IMAGE ----------------
+
 FROM debian:bookworm-slim
 
 RUN apt-get update && \
@@ -30,22 +32,47 @@ RUN apt-get update && \
         ffmpeg \
         curl \
         unzip \
-        zlib1g && \
+        zlib1g \
+        ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
+# SSL certs
 COPY --from=builder /etc/ssl/certs /etc/ssl/certs
 
+# -------- yt-dlp --------
 RUN curl -fL \
       https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux \
       -o /usr/local/bin/yt-dlp && \
-    chmod 0755 /usr/local/bin/yt-dlp && \
-    curl -fsSL https://deno.land/install.sh -o /tmp/deno-install.sh && \
-    sh /tmp/deno-install.sh && \
-    rm -f /tmp/deno-install.sh
+    chmod 0755 /usr/local/bin/yt-dlp
 
-ENV DENO_INSTALL=/root/.deno
-ENV PATH=$DENO_INSTALL/bin:$PATH
 
+# -------- Node.js (for yt-dlp JS challenges) --------
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+
+# -------- Deno --------
+RUN curl -fsSL https://deno.land/install.sh | sh && \
+    mv /root/.deno/bin/deno /usr/local/bin/deno && \
+    chmod +x /usr/local/bin/deno && \
+    rm -rf /root/.deno
+
+
+# -------- Bun --------
+RUN curl -fsSL https://bun.sh/install | bash && \
+    mv /root/.bun/bin/bun /usr/local/bin/bun && \
+    chmod +x /usr/local/bin/bun && \
+    rm -rf /root/.bun
+
+
+# Verify all JS engines exist
+RUN node --version && \
+    deno --version && \
+    bun --version
+
+
+# Create non-root user
 RUN useradd -r -u 10001 appuser && \
     mkdir -p /app && \
     chown -R appuser:appuser /app
