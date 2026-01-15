@@ -42,9 +42,7 @@ var youtubePatterns = []*regexp.Regexp{
 }
 
 func init() {
-	Register(60, &YtDlpDownloader{
-		name: PlatformYtDlp,
-	})
+	Register(60, &YtDlpDownloader{name: PlatformYtDlp})
 }
 
 func (y *YtDlpDownloader) Name() state.PlatformName {
@@ -53,11 +51,8 @@ func (y *YtDlpDownloader) Name() state.PlatformName {
 
 func (y *YtDlpDownloader) IsValid(query string) bool {
 	query = strings.TrimSpace(query)
-	parsedURL, err := url.Parse(query)
-	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
-		return false
-	}
-	return true
+	u, err := url.Parse(query)
+	return err == nil && u.Scheme != "" && u.Host != ""
 }
 
 func cacheKey(track *state.Track) string {
@@ -93,17 +88,16 @@ func (y *YtDlpDownloader) GetTracks(query string, video bool) ([]*state.Track, e
 	}
 
 	if info.IsLive {
-		return nil, errors.New("live streams are not supported by yt-dlp downloader")
+		return nil, errors.New("live streams not supported")
 	}
 
 	var tracks []*state.Track
-
 	if len(info.Entries) > 0 {
-		for _, entry := range info.Entries {
-			if entry.IsLive {
+		for _, e := range info.Entries {
+			if e.IsLive {
 				continue
 			}
-			tracks = append(tracks, y.infoToTrack(&entry, video))
+			tracks = append(tracks, y.infoToTrack(&e, video))
 		}
 	} else {
 		tracks = append(tracks, y.infoToTrack(info, video))
@@ -124,17 +118,15 @@ func (y *YtDlpDownloader) Download(
 
 	key := cacheKey(track)
 
-	// Cache check
 	if path, err := checkDownloadedFile(key); err == nil {
 		if track.Video {
 			if isValidVideoFile(path) {
-				gologging.InfoF("YtDlp: Using cached video file %s", path)
+				gologging.InfoF("YtDlp: Using cached video %s", path)
 				return path, nil
 			}
-			gologging.WarnF("YtDlp: Cached video invalid, deleting: %s", path)
 			_ = os.Remove(path)
 		} else {
-			gologging.InfoF("YtDlp: Using cached audio file %s", path)
+			gologging.InfoF("YtDlp: Using cached audio %s", path)
 			return path, nil
 		}
 	}
@@ -162,7 +154,6 @@ func (y *YtDlpDownloader) Download(
 
 		"--print", "after_move:filepath",
 		"-o", outTpl,
-
 		"--verbose",
 	}
 
@@ -195,26 +186,25 @@ func (y *YtDlpDownloader) Download(
 
 	args = append(args, track.URL)
 
+	gologging.InfoF("YtDlp: Running yt-dlp with args: %v", args)
+
 	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
-
-	// Strongest debug capture
 	out, err := cmd.CombinedOutput()
+
 	if err != nil {
-		exitCode := -1
-		if ee, ok := err.(*exec.ExitError); ok {
-			exitCode = ee.ExitCode()
+		gologging.ErrorF("YtDlp: Download failed")
+		gologging.ErrorF("YtDlp: Command: yt-dlp %v", args)
+
+		if len(out) == 0 {
+			gologging.ErrorF("YtDlp: No output from yt-dlp")
+		} else {
+			for _, line := range strings.Split(string(out), "\n") {
+				line = strings.TrimSpace(line)
+				if line != "" {
+					gologging.ErrorF("YtDlp: %s", line)
+				}
+			}
 		}
-
-		gologging.ErrorF(
-			"YtDlp: Download failed\n"+
-				"Exit code: %d\n"+
-				"Command: yt-dlp %v\n"+
-				"Output:\n%s",
-			exitCode,
-			args,
-			string(out),
-		)
-
 		return "", err
 	}
 
@@ -232,11 +222,7 @@ func (y *YtDlpDownloader) Download(
 }
 
 func (y *YtDlpDownloader) extractMetadata(urlStr string) (*ytdlpInfo, error) {
-	args := []string{
-		"-j",
-		"--no-check-certificate",
-		"--verbose",
-	}
+	args := []string{"-j", "--verbose"}
 
 	if y.isYouTubeURL(urlStr) {
 		if cookie, err := cookies.GetRandomCookieFile(); err == nil && cookie != "" {
@@ -246,14 +232,17 @@ func (y *YtDlpDownloader) extractMetadata(urlStr string) (*ytdlpInfo, error) {
 
 	args = append(args, urlStr)
 
+	gologging.InfoF("YtDlp: Extracting metadata with args: %v", args)
+
 	cmd := exec.Command("yt-dlp", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		gologging.ErrorF(
-			"YtDlp: Metadata extraction failed\nCommand: yt-dlp %v\nOutput:\n%s",
-			args,
-			string(out),
-		)
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				gologging.ErrorF("YtDlp META: %s", line)
+			}
+		}
 		return nil, err
 	}
 
@@ -261,7 +250,6 @@ func (y *YtDlpDownloader) extractMetadata(urlStr string) (*ytdlpInfo, error) {
 	if err := json.Unmarshal(out, &info); err != nil {
 		return nil, err
 	}
-
 	return &info, nil
 }
 
