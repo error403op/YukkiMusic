@@ -71,18 +71,6 @@ func cacheKey(track *state.Track) string {
 	return track.ID + "_audio"
 }
 
-func ensureDownloadsDir() error {
-	return os.MkdirAll("downloads", 0755)
-}
-
-func checkDownloadedFile(id string) (string, error) {
-	pattern := filepath.Join("downloads", id+".*")
-	files, err := filepath.Glob(pattern)
-	if err != nil || len(files) == 0 {
-		return "", errors.New("no cache")
-	}
-	return files[0], nil
-}
 
 /*
 Direct streaming via yt-dlp -g
