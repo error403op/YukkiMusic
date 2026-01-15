@@ -21,8 +21,6 @@
 package utils
 
 import (
-	"strings"
-
 	"github.com/Laky-64/gologging"
 	"github.com/amarnathcjd/gogram/telegram"
 )
@@ -47,7 +45,9 @@ func EOR(
 
 	m, err = msg.Edit(text, opts...)
 	if err != nil {
-		_ = msg.Delete()
+		// msg.Delete() returns (bool, error)
+		_, _ = msg.Delete()
+
 		m, err = msg.Respond(text, opts...)
 	}
 
@@ -56,3 +56,4 @@ func EOR(
 	}
 	return m, err
 }
+
