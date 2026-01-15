@@ -149,7 +149,6 @@ func (y *YtDlpDownloader) Download(
 		"--file-access-retries", "5",
 		"--extractor-retries", "3",
 
-		// DO NOT force ffmpeg downloader for YouTube
 		"--hls-prefer-ffmpeg",
 
 		"--print", "after_move:filepath",
@@ -191,19 +190,20 @@ func (y *YtDlpDownloader) Download(
 	gologging.InfoF("YtDlp: Running yt-dlp with args: %v", args)
 
 	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
-
-	// Make sure all JS runtimes are visible
 	cmd.Env = append(os.Environ(),
 		"PATH=/usr/local/bin:/usr/bin:/bin:/root/.deno/bin",
 		"YTDLP_NO_UPDATE=1",
 	)
 
-	out, err := cmd.CombinedOutput()
-	if err != nil {
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
 		gologging.ErrorF("YtDlp: Download failed")
 		gologging.ErrorF("YtDlp: Command: yt-dlp %v", args)
 
-		for _, line := range strings.Split(string(out), "\n") {
+		for _, line := range strings.Split(stderr.String(), "\n") {
 			line = strings.TrimSpace(line)
 			if line != "" {
 				gologging.ErrorF("YtDlp: %s", line)
@@ -212,9 +212,10 @@ func (y *YtDlpDownloader) Download(
 		return "", err
 	}
 
-	finalPath := strings.TrimSpace(string(out))
+	finalPath := strings.TrimSpace(stdout.String())
 	if finalPath == "" {
-		return "", errors.New("yt-dlp returned empty file path")
+		gologging.ErrorF("YtDlp: stdout empty, stderr:\n%s", stderr.String())
+		return "", errors.New("yt-dlp did not return a file path")
 	}
 
 	if _, err := os.Stat(finalPath); err != nil {
@@ -226,7 +227,7 @@ func (y *YtDlpDownloader) Download(
 }
 
 func (y *YtDlpDownloader) extractMetadata(urlStr string) (*ytdlpInfo, error) {
-	args := []string{"-j", "--verbose"}
+	args := []string{"-j"}
 
 	if y.isYouTubeURL(urlStr) {
 		if cookie, err := cookies.GetRandomCookieFile(); err == nil && cookie != "" {
@@ -243,14 +244,8 @@ func (y *YtDlpDownloader) extractMetadata(urlStr string) (*ytdlpInfo, error) {
 		"PATH=/usr/local/bin:/usr/bin:/bin:/root/.deno/bin",
 	)
 
-	out, err := cmd.CombinedOutput()
+	out, err := cmd.Output()
 	if err != nil {
-		for _, line := range strings.Split(string(out), "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" {
-				gologging.ErrorF("YtDlp META: %s", line)
-			}
-		}
 		return nil, err
 	}
 
