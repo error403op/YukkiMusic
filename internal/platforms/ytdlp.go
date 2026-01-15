@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/Laky-64/gologging"
 	"github.com/amarnathcjd/gogram/telegram"
@@ -36,7 +39,13 @@ type ytdlpInfo struct {
 	Uploader    string      `json:"uploader"`
 	Description string      `json:"description"`
 	IsLive      bool        `json:"is_live"`
+	WasLive     bool        `json:"was_live"` // past live streams
 	Entries     []ytdlpInfo `json:"entries"`
+	Formats     []struct {
+		URL    string `json:"url"`
+		Format string `json:"format_note"`
+		Ext    string `json:"ext"`
+	} `json:"formats"`
 }
 
 var youtubePatterns = []*regexp.Regexp{
@@ -59,11 +68,6 @@ func (y *YtDlpDownloader) IsValid(query string) bool {
 	return err == nil && parsedURL.Scheme != "" && parsedURL.Host != ""
 }
 
-/*
-Cache key fix:
-Audio and Video MUST be separate, otherwise audio cache is reused for video
-which causes: "no valid video dimensions found"
-*/
 func cacheKey(track *state.Track) string {
 	if track.Video {
 		return track.ID + "_video"
@@ -71,24 +75,40 @@ func cacheKey(track *state.Track) string {
 	return track.ID + "_audio"
 }
 
+// validateStreamURL checks if the URL is reachable and returns content-type
+func validateStreamURL(ctx context.Context, u string) error {
+	req, err := http.NewRequestWithContext(ctx, "HEAD", u, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create HEAD request: %w", err)
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; yt-dlp/2023.07.06)")
 
-/*
-Direct streaming via yt-dlp -g
-Works for:
-YouTube, Twitter/X, Instagram, Reddit, TikTok, many CDNs.
-If it fails → fallback to real download.
-*/
-func (y *YtDlpDownloader) getDirectStreamURL(track *state.Track) (string, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("stream unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("stream returned HTTP %d", resp.StatusCode)
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	gologging.DebugF("Stream URL validated | Content-Type: %s", contentType)
+	return nil
+}
+
+func (y *YtDlpDownloader) getDirectStreamURL(ctx context.Context, track *state.Track) (string, error) {
 	args := []string{
 		"-g",
 		"--no-playlist",
 		"--geo-bypass",
 		"--no-check-certificate",
 		"--prefer-free-formats",
+		"--no-warnings",
 	}
 
-	// 🚨 Important:
-	// Force DASH, avoid HLS for YouTube
 	if y.isYouTubeURL(track.URL) {
 		if track.Video {
 			args = append(args,
@@ -100,7 +120,6 @@ func (y *YtDlpDownloader) getDirectStreamURL(track *state.Track) (string, error)
 			)
 		}
 	} else {
-		// Other sites: HLS is OK
 		if track.Video {
 			args = append(args, "-f", "bestvideo*[height<=720]/best")
 		} else {
@@ -111,45 +130,74 @@ func (y *YtDlpDownloader) getDirectStreamURL(track *state.Track) (string, error)
 	if y.isYouTubeURL(track.URL) {
 		if cookie, err := cookies.GetRandomCookieFile(); err == nil && cookie != "" {
 			args = append(args, "--cookies", cookie)
+			gologging.DebugF("Using cookie file: %s", cookie)
 		}
 	}
 
 	args = append(args, track.URL)
 
-	cmd := exec.Command("yt-dlp", args...)
-
-	var out bytes.Buffer
+	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
+	var out, stderr bytes.Buffer
 	cmd.Stdout = &out
+	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
-		return "", err
+	gologging.DebugF("Executing yt-dlp for direct stream: %v", args)
+
+	start := time.Now()
+	err := cmd.Run()
+	duration := time.Since(start)
+
+	if err != nil {
+		gologging.ErrorF("yt-dlp -g failed after %v\nArgs: %v\nStderr:\n%s\nError: %v",
+			duration, args, stderr.String(), err)
+		return "", fmt.Errorf("yt-dlp stream extraction failed: %w", err)
 	}
 
 	streamURL := strings.TrimSpace(out.String())
-	if streamURL == "" || !strings.HasPrefix(streamURL, "http") {
-		return "", errors.New("invalid stream url")
+	if streamURL == "" {
+		gologging.WarnF("yt-dlp returned empty stream URL for %s", track.URL)
+		return "", errors.New("empty stream URL from yt-dlp")
 	}
 
-	return streamURL, nil
+	urls := strings.Split(streamURL, "\n")
+	for i, u := range urls {
+		u = strings.TrimSpace(u)
+		if u == "" || !strings.HasPrefix(u, "http") {
+			continue
+		}
+		gologging.InfoF("Validating candidate stream URL #%d: %s", i+1, u)
+		if err := validateStreamURL(ctx, u); err == nil {
+			gologging.InfoF("✅ Valid stream URL selected: %s", u)
+			return u, nil
+		}
+		gologging.WarnF("Stream URL #%d invalid: %v", i+1, err)
+	}
+
+	return "", errors.New("no valid stream URLs returned by yt-dlp")
 }
-
-
 
 func (y *YtDlpDownloader) GetTracks(query string, video bool) ([]*state.Track, error) {
 	info, err := y.extractMetadata(query)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to extract metadata: %w", err)
 	}
 
+	// Handle live or upcoming
 	if info.IsLive {
-		return nil, errors.New("live streams are not supported")
+		gologging.InfoF("Detected live stream: %s (ID: %s)", info.Title, info.ID)
+		// We now SUPPORT live streams via direct URL!
+		return []*state.Track{y.infoToTrack(info, video)}, nil
+	}
+	if info.WasLive {
+		gologging.InfoF("Detected past live stream (VOD): %s", info.Title)
 	}
 
 	var tracks []*state.Track
 	if len(info.Entries) > 0 {
+		gologging.InfoF("Playlist detected with %d entries", len(info.Entries))
 		for _, entry := range info.Entries {
 			if entry.IsLive {
-				continue
+				gologging.InfoF("Including live entry in playlist: %s", entry.Title)
 			}
 			tracks = append(tracks, y.infoToTrack(&entry, video))
 		}
@@ -164,40 +212,40 @@ func (y *YtDlpDownloader) IsDownloadSupported(source state.PlatformName) bool {
 	return source == y.name || source == PlatformYouTube
 }
 
-/*
-Download():
-1. Try DIRECT STREAM first (fastest, no disk, no CPU)
-2. If failed → fallback to real download
-3. Cache is separated for audio/video
-4. Universal format support
-5. Telegram compatible containers
-*/
 func (y *YtDlpDownloader) Download(
 	ctx context.Context,
 	track *state.Track,
-	_ *telegram.NewMessage,
+	msg *telegram.NewMessage,
 ) (string, error) {
 
-	// 1) Try direct stream
-	if streamURL, err := y.getDirectStreamURL(track); err == nil {
-		gologging.InfoF("YtDlp: Using direct stream for %s", track.ID)
+	// Step 1: Try direct streaming (even for live!)
+	gologging.InfoF("Attempting direct stream for track: %s (Video=%v, IsLive=%v)",
+		track.ID, track.Video, track.IsLive)
+
+	if streamURL, err := y.getDirectStreamURL(ctx, track); err == nil {
+		gologging.InfoF("✅ Direct stream succeeded for %s → %s", track.ID, streamURL)
 		return streamURL, nil
+	} else {
+		gologging.WarnF("Direct stream failed for %s: %v", track.ID, err)
 	}
 
-	// 2) Fallback to cached download
+	// Step 2: If NOT live, try cached/download
+	if track.IsLive {
+		return "", errors.New("live stream cannot be downloaded as file; only direct streaming supported")
+	}
+
 	key := cacheKey(track)
 	if path, err := checkDownloadedFile(key); err == nil {
-		gologging.InfoF("YtDlp: Using cached file for %s", key)
+		gologging.InfoF("Using cached file: %s", path)
 		return path, nil
 	}
 
 	if err := ensureDownloadsDir(); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to create downloads dir: %w", err)
 	}
 
 	outTpl := filepath.Join("downloads", key+".%(ext)s")
 
-	// Universal stable arguments
 	args := []string{
 		"--no-playlist",
 		"--no-part",
@@ -222,14 +270,12 @@ func (y *YtDlpDownloader) Download(
 	}
 
 	if track.Video {
-		// Telegram safe: MP4, <=720p, no broken codecs
 		args = append(args,
 			"-f", "bestvideo*[height<=720][vcodec!=vp9]/best[height<=720]/best",
 			"--merge-output-format", "mp4",
 			"--remux-video", "mp4",
 		)
 	} else {
-		// Best quality audio for Telegram voice chats
 		args = append(args,
 			"-f", "bestaudio[acodec=opus]/bestaudio/best",
 			"--extract-audio",
@@ -247,31 +293,54 @@ func (y *YtDlpDownloader) Download(
 	args = append(args, track.URL)
 
 	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
-
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
-		gologging.ErrorF(
-			"YtDlp error: %v\nSTDOUT:\n%s\nSTDERR:\n%s",
-			err,
-			stdout.String(),
-			stderr.String(),
-		)
-		return "", fmt.Errorf("yt-dlp error: %w", err)
+	gologging.InfoF("Starting full download with args: %v", args)
+
+	start := time.Now()
+	err := cmd.Run()
+	duration := time.Since(start)
+
+	if err != nil {
+		stdoutStr := stdout.String()
+		stderrStr := stderr.String()
+
+		// Log everything
+		gologging.ErrorF(`
+❌ yt-dlp download FAILED after %v
+Track ID: %s
+URL: %s
+Args: %v
+STDOUT:
+%s
+STDERR:
+%s
+Final Error: %v`,
+			duration, track.ID, track.URL, args, stdoutStr, stderrStr, err)
+
+		// Check if context was cancelled
+		if ctx.Err() == context.Canceled {
+			return "", errors.New("download cancelled by user")
+		}
+
+		return "", fmt.Errorf("yt-dlp download failed: %w", err)
 	}
 
 	finalPath := strings.TrimSpace(stdout.String())
 	if finalPath == "" {
-		return "", errors.New("yt-dlp returned empty path")
+		return "", errors.New("yt-dlp did not output a file path")
 	}
 
 	if _, err := os.Stat(finalPath); err != nil {
-		return "", err
+		return "", fmt.Errorf("downloaded file missing at %s: %w", finalPath, err)
 	}
 
-	gologging.InfoF("YtDlp: Downloaded %s", finalPath)
+	fileInfo, _ := os.Stat(finalPath)
+	gologging.InfoF("✅ Download complete: %s (%.2f MB) in %v",
+		finalPath, float64(fileInfo.Size())/1024/1024, duration)
+
 	return finalPath, nil
 }
 
@@ -287,19 +356,27 @@ func (y *YtDlpDownloader) extractMetadata(urlStr string) (*ytdlpInfo, error) {
 	args = append(args, urlStr)
 
 	cmd := exec.Command("yt-dlp", args...)
-
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
+	gologging.DebugF("Extracting metadata with: yt-dlp %v", args)
+
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("metadata extraction failed: %w\n%s", err, stderr.String())
+		stderrStr := stderr.String()
+		gologging.ErrorF("Metadata extraction failed:\nURL: %s\nStderr:\n%s\nError: %v",
+			urlStr, stderrStr, err)
+		return nil, fmt.Errorf("metadata extraction failed: %w\nStderr:\n%s", err, stderrStr)
 	}
 
 	var info ytdlpInfo
 	if err := json.Unmarshal(stdout.Bytes(), &info); err != nil {
-		return nil, err
+		gologging.ErrorF("Failed to parse yt-dlp JSON:\n%s\nError: %v", stdout.String(), err)
+		return nil, fmt.Errorf("invalid JSON from yt-dlp: %w", err)
 	}
+
+	gologging.DebugF("Metadata extracted: ID=%s, Title=%s, IsLive=%v, WasLive=%v",
+		info.ID, info.Title, info.IsLive, info.WasLive)
 
 	return &info, nil
 }
@@ -318,6 +395,7 @@ func (y *YtDlpDownloader) infoToTrack(info *ytdlpInfo, video bool) *state.Track 
 		URL:      url,
 		Source:   PlatformYtDlp,
 		Video:    video,
+		IsLive:   info.IsLive, // ← Critical: expose live status!
 	}
 }
 
