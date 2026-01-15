@@ -1,3 +1,5 @@
+// File: main/internal/core/models/models.go (or wherever your models.go is located)
+
 /*
  * This file is part of YukkiMusic.
  *
@@ -15,7 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ * along with this program. If not, see <https://www.gnu.org/licenses/ >.
  */
 
 package state
@@ -36,6 +38,7 @@ type (
 		Requester string       // html mention or @username who requested this track
 		Video     bool         // whether this track will be played as video
 		Source    PlatformName // unique PlatformName
+		IsLive    bool         // <-- ADD THIS FIELD: indicates if the track is a live stream
 	}
 	PlatformName string
 
@@ -46,7 +49,7 @@ type (
 		Download(
 			ctx context.Context,
 			track *Track,
-			mystic *telegram.NewMessage,
+			mystic *telegram.NewMessage, // Note: Typo in parameter name? 'msg' might be better?
 		) (string, error)
 		IsDownloadSupported(source PlatformName) bool
 	}
