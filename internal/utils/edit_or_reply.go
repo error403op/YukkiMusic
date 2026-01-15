@@ -21,18 +21,33 @@
 package utils
 
 import (
+	"strings"
+
 	"github.com/Laky-64/gologging"
 	"github.com/amarnathcjd/gogram/telegram"
 )
+
+const telegramMaxMessageSize = 4000
+
+func trimTelegramText(text string) string {
+	if len(text) <= telegramMaxMessageSize {
+		return text
+	}
+	return text[:telegramMaxMessageSize-50] + "\n\n⚠️ Message trimmed because it was too long."
+}
 
 func EOR(
 	msg *telegram.NewMessage,
 	text string,
 	opts ...*telegram.SendOptions,
 ) (m *telegram.NewMessage, err error) {
+
+	// Protect Telegram from huge messages
+	text = trimTelegramText(text)
+
 	m, err = msg.Edit(text, opts...)
 	if err != nil {
-		msg.Delete()
+		_ = msg.Delete()
 		m, err = msg.Respond(text, opts...)
 	}
 
