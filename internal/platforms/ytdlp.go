@@ -149,25 +149,27 @@ func (y *YtDlpDownloader) Download(
 		"--file-access-retries", "5",
 		"--extractor-retries", "3",
 
+		// DO NOT force ffmpeg downloader for YouTube
 		"--hls-prefer-ffmpeg",
-		"--downloader", "ffmpeg",
 
 		"--print", "after_move:filepath",
 		"-o", outTpl,
+
 		"--verbose",
 	}
 
 	if y.isYouTubeURL(track.URL) {
 		if track.Video {
 			args = append(args,
-				"-f", "(bv*[height<=720]/bv*)+(ba/best)",
+				"-f", "(bv*[height<=720]/bv*/bestvideo)+(ba/best)",
 				"--merge-output-format", "mp4",
 			)
 		} else {
 			args = append(args,
-				"-f", "bestaudio",
+				"-f", "ba/best",
 				"--extract-audio",
 				"--audio-format", "opus",
+				"--audio-quality", "0",
 			)
 		}
 	} else {
@@ -189,20 +191,22 @@ func (y *YtDlpDownloader) Download(
 	gologging.InfoF("YtDlp: Running yt-dlp with args: %v", args)
 
 	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
-	out, err := cmd.CombinedOutput()
 
+	// Make sure all JS runtimes are visible
+	cmd.Env = append(os.Environ(),
+		"PATH=/usr/local/bin:/usr/bin:/bin:/root/.deno/bin",
+		"YTDLP_NO_UPDATE=1",
+	)
+
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		gologging.ErrorF("YtDlp: Download failed")
 		gologging.ErrorF("YtDlp: Command: yt-dlp %v", args)
 
-		if len(out) == 0 {
-			gologging.ErrorF("YtDlp: No output from yt-dlp")
-		} else {
-			for _, line := range strings.Split(string(out), "\n") {
-				line = strings.TrimSpace(line)
-				if line != "" {
-					gologging.ErrorF("YtDlp: %s", line)
-				}
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				gologging.ErrorF("YtDlp: %s", line)
 			}
 		}
 		return "", err
@@ -235,6 +239,10 @@ func (y *YtDlpDownloader) extractMetadata(urlStr string) (*ytdlpInfo, error) {
 	gologging.InfoF("YtDlp: Extracting metadata with args: %v", args)
 
 	cmd := exec.Command("yt-dlp", args...)
+	cmd.Env = append(os.Environ(),
+		"PATH=/usr/local/bin:/usr/bin:/bin:/root/.deno/bin",
+	)
+
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		for _, line := range strings.Split(string(out), "\n") {
