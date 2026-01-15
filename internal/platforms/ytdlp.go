@@ -195,12 +195,19 @@ func (y *YtDlpDownloader) Download(
 
 	if err := cmd.Run(); err != nil {
 		gologging.ErrorF(
-			"YtDlp: Download failed: %v\nSTDOUT:\n%s\nSTDERR:\n%s",
+			`YtDlp: Download failed 
+			Command: yt-dlp %v
+			
+			STDOUT:
+			%s
+			
+			STDERR:
+			%s`,
 			err,
 			stdout.String(),
 			stderr.String(),
 		)
-		return "", fmt.Errorf("yt-dlp error: %w", err)
+		return "", err
 	}
 
 	finalPath := strings.TrimSpace(stdout.String())
