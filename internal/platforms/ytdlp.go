@@ -85,13 +85,27 @@ func (y *YtDlpDownloader) getDirectStreamURL(track *state.Track) (string, error)
 		"--geo-bypass",
 		"--no-check-certificate",
 		"--prefer-free-formats",
-		"--hls-prefer-ffmpeg",
 	}
 
-	if track.Video {
-		args = append(args, "-f", "bestvideo*[height<=720]/best")
+	// 🚨 Important:
+	// Force DASH, avoid HLS for YouTube
+	if y.isYouTubeURL(track.URL) {
+		if track.Video {
+			args = append(args,
+				"-f", "bestvideo*[protocol!=m3u8][height<=720]/best[protocol!=m3u8]",
+			)
+		} else {
+			args = append(args,
+				"-f", "bestaudio[protocol!=m3u8]/bestaudio",
+			)
+		}
 	} else {
-		args = append(args, "-f", "bestaudio/best")
+		// Other sites: HLS is OK
+		if track.Video {
+			args = append(args, "-f", "bestvideo*[height<=720]/best")
+		} else {
+			args = append(args, "-f", "bestaudio/best")
+		}
 	}
 
 	if y.isYouTubeURL(track.URL) {
@@ -118,6 +132,8 @@ func (y *YtDlpDownloader) getDirectStreamURL(track *state.Track) (string, error)
 
 	return streamURL, nil
 }
+
+
 
 func (y *YtDlpDownloader) GetTracks(query string, video bool) ([]*state.Track, error) {
 	info, err := y.extractMetadata(query)
