@@ -1,7 +1,6 @@
 package platforms
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -132,7 +131,7 @@ func (y *YtDlpDownloader) Download(
 				gologging.InfoF("YtDlp: Using cached video file %s", path)
 				return path, nil
 			}
-			gologging.WarnF("YtDlp: Cached file invalid video, deleting: %s", path)
+			gologging.WarnF("YtDlp: Cached video invalid, deleting: %s", path)
 			_ = os.Remove(path)
 		} else {
 			gologging.InfoF("YtDlp: Using cached audio file %s", path)
@@ -152,15 +151,25 @@ func (y *YtDlpDownloader) Download(
 		"--no-part",
 		"--force-overwrites",
 		"--no-check-certificate",
+
+		"--retries", "5",
+		"--fragment-retries", "5",
+		"--file-access-retries", "5",
+		"--extractor-retries", "3",
+
+		"--hls-prefer-ffmpeg",
+		"--downloader", "ffmpeg",
+
 		"--print", "after_move:filepath",
 		"-o", outTpl,
+
 		"--verbose",
 	}
 
 	if y.isYouTubeURL(track.URL) {
 		if track.Video {
 			args = append(args,
-				"-f", "bestvideo*[height<=720][vcodec!=vp9]/best[height<=720]/best",
+				"-f", "(bv*[height<=720]/bv*)+(ba/best)",
 				"--merge-output-format", "mp4",
 			)
 		} else {
@@ -188,28 +197,28 @@ func (y *YtDlpDownloader) Download(
 
 	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	// Strongest debug capture
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		exitCode := -1
+		if ee, ok := err.(*exec.ExitError); ok {
+			exitCode = ee.ExitCode()
+		}
 
-	if err := cmd.Run(); err != nil {
 		gologging.ErrorF(
-			`YtDlp: Download failed 
-			Command: yt-dlp %v
-			
-			STDOUT:
-			%s
-			
-			STDERR:
-			%s`,
-			err,
-			stdout.String(),
-			stderr.String(),
+			"YtDlp: Download failed\n"+
+				"Exit code: %d\n"+
+				"Command: yt-dlp %v\n"+
+				"Output:\n%s",
+			exitCode,
+			args,
+			string(out),
 		)
+
 		return "", err
 	}
 
-	finalPath := strings.TrimSpace(stdout.String())
+	finalPath := strings.TrimSpace(string(out))
 	if finalPath == "" {
 		return "", errors.New("yt-dlp returned empty file path")
 	}
@@ -225,8 +234,8 @@ func (y *YtDlpDownloader) Download(
 func (y *YtDlpDownloader) extractMetadata(urlStr string) (*ytdlpInfo, error) {
 	args := []string{
 		"-j",
-		"--no-warnings",
 		"--no-check-certificate",
+		"--verbose",
 	}
 
 	if y.isYouTubeURL(urlStr) {
@@ -238,15 +247,18 @@ func (y *YtDlpDownloader) extractMetadata(urlStr string) (*ytdlpInfo, error) {
 	args = append(args, urlStr)
 
 	cmd := exec.Command("yt-dlp", args...)
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-
-	if err := cmd.Run(); err != nil {
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		gologging.ErrorF(
+			"YtDlp: Metadata extraction failed\nCommand: yt-dlp %v\nOutput:\n%s",
+			args,
+			string(out),
+		)
 		return nil, err
 	}
 
 	var info ytdlpInfo
-	if err := json.Unmarshal(stdout.Bytes(), &info); err != nil {
+	if err := json.Unmarshal(out, &info); err != nil {
 		return nil, err
 	}
 
